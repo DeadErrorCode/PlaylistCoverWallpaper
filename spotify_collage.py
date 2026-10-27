@@ -344,19 +344,38 @@ def rating_window(cover_list):
 
 
 def ask_too_few(count, slots, W, H):
-    """Asks via pop-up: True = repeat covers, False = leave gaps. Cancel quits the program."""
-    answer = _dialog(
-        "askyesnocancel", f"{TITLE} – Too few covers",
-        f"You approved {count} covers, but {W}x{H} needs {slots} "
-        f"({slots - count} missing).\n\n"
-        "Yes  =  repeat covers (fills the whole screen)\n"
-        "No  =  use every cover only once, leave gaps\n"
-        "Cancel  =  don't create anything",
-    )
-    if answer is None:
+    """Asks via pop-up: "repeat", "upscale" or "gaps". Cancel quits the program."""
+    text = (f"You approved {count} covers, but {W}x{H} needs {slots} "
+            f"({slots - count} missing).\n\n"
+            "Repeat  –  repeat covers to fill the whole screen\n"
+            "Upscale  –  every cover once, made bigger so there are no gaps\n"
+            "Gaps  –  every cover once at normal size, leave gaps\n"
+            "Cancel  –  don't create anything")
+    choice = [None]
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.title(f"{TITLE} – Too few covers")
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+        tk.Label(root, text=text, justify="left", font=("Segoe UI", 10), padx=18, pady=14).pack()
+        row = tk.Frame(root)
+        row.pack(pady=(0, 14))
+
+        def pick(value):
+            choice[0] = value
+            root.destroy()
+
+        for label, value in (("Repeat", "repeat"), ("Upscale", "upscale"), ("Gaps", "gaps"), ("Cancel", None)):
+            tk.Button(row, text=label, width=10, command=lambda v=value: pick(v)).pack(side="left", padx=4)
+        root.mainloop()
+    except Exception:  # no window possible
+        print("Too few covers and no way to ask – using upscale.")
+        return "upscale"
+    if choice[0] is None:
         print("Cancelled.")
         sys.exit(0)
-    return answer
+    return choice[0]
 
 
 # --------------------------------------------------------------------------
@@ -379,24 +398,33 @@ class Tiles:
         return self.cache[key]
 
 
-def layout(n, W, H):
+def layout(n, W, H, upscale=False):
     """Grid of cells across the whole canvas (edge cells may stick out).
 
     Tile size is height / 6.5; if not all n covers fit, the tile gets smaller.
+    With upscale, the tile grows until there are no more cells than covers.
     Returns (tile size, columns, [(x, y) per cell]).
     """
     tile = max(80, round(H / 6.5))  # covers look the same size on every monitor
-    while tile > 20 and math.ceil(W / tile) * math.ceil(H / tile) < n:
-        tile -= 1
+    if upscale:
+        while math.ceil(W / tile) * math.ceil(H / tile) > n:
+            tile += 1
+    else:
+        while tile > 20 and math.ceil(W / tile) * math.ceil(H / tile) < n:
+            tile -= 1
     cols, rows = math.ceil(W / tile), math.ceil(H / tile)
     ox, oy = (W - cols * tile) // 2, (H - rows * tile) // 2
     cells = [(ox + c * tile, oy + r * tile) for r in range(rows) for c in range(cols)]
     return tile, cols, cells
 
 
-def assign(tiles, slots, cols, repeat, rng):
-    """Which cover goes into which cell (None = gap). Every cover appears at least once."""
-    n = len(tiles.items)
+def assign(tiles, tile, cells, cols, repeat, rng):
+    """Returns [(cover, (x, y))]: every cover at least once; empty cells stay gaps.
+
+    If there are more covers than cells (upscale), the extra covers are laid
+    on top across the seams of random cells.
+    """
+    n, slots = len(tiles.items), len(cells)
     grid = list(range(n))
     if slots > n:
         if repeat:
@@ -405,7 +433,7 @@ def assign(tiles, slots, cols, repeat, rng):
             grid += [None] * (slots - n)
 
     def neighbours_equal():
-        for i, k in enumerate(grid):
+        for i, k in enumerate(grid[:slots]):
             if k is not None and ((i % cols and grid[i - 1] == k) or (i >= cols and grid[i - cols] == k)):
                 return True
         return False
@@ -415,17 +443,22 @@ def assign(tiles, slots, cols, repeat, rng):
         rng.shuffle(grid)
         if not repeat or not neighbours_equal():
             break
-    return grid
 
-
-def draw(canvas, tiles, tile, cells, grid, rng, rotation):
-    # Every cover gets one cell; size/position/rotation vary slightly.
     spots = [(k, c) for k, c in zip(grid, cells) if k is not None]
-    spots.sort(key=lambda s: tiles.items[s[0]][1])  # low priority first -> high ends up on top
+    for k in grid[slots:]:
+        x, y = rng.choice(cells)
+        spots.append((k, (x + rng.randint(-tile // 2, tile // 2), y + rng.randint(-tile // 2, tile // 2))))
+    return spots
+
+
+def draw(canvas, tiles, tile, spots, rng, rotation):
+    # Size/position/rotation of every cover vary slightly around its spot.
+    spots = sorted(spots, key=lambda s: tiles.items[s[0]][1])  # low priority first -> high ends up on top
 
     for k, (cx0, cy0) in spots:
         prio = tiles.items[k][1]
-        size = max(1, int(tile * rng.uniform(0.95, 1.05) * (0.9 + 0.1 * prio)))
+        # at least 1.2 x tile, so the cell stays covered despite the offset of up to tile / 10
+        size = max(1, int(tile * rng.uniform(1.0, 1.05) * (1.1 + 0.1 * prio)))
         img = tiles.image(k, size).convert("RGBA")
         if rotation:
             img = img.rotate(rng.uniform(-rotation, rotation), resample=Image.BICUBIC, expand=True)
@@ -447,15 +480,17 @@ def draw(canvas, tiles, tile, cells, grid, rng, rotation):
 def make_collage(entries, W, H, rotation, rng, ask=ask_too_few):
     """entries: [(image, priority)]. Asks via `ask` if there are too few covers."""
     tile, cols, cells = layout(len(entries), W, H)
-    repeat = False
+    choice = "fit"
     if len(entries) < len(cells):
-        repeat = ask(len(entries), len(cells), W, H)
+        choice = ask(len(entries), len(cells), W, H)
+        if choice == "upscale":
+            tile, cols, cells = layout(len(entries), W, H, upscale=True)
     print(f"Creating collage ({len(entries)} covers, {len(cells)} slots, tile {tile}px, "
-          f"{'with' if repeat else 'without'} repeats, {W}x{H}) ...")
+          f"{choice}, {W}x{H}) ...")
     tiles = Tiles(entries)
-    grid = assign(tiles, len(cells), cols, repeat, rng)
+    spots = assign(tiles, tile, cells, cols, choice == "repeat", rng)
     canvas = Image.new("RGB", (W, H), (18, 18, 18))
-    draw(canvas, tiles, tile, cells, grid, rng, rotation)
+    draw(canvas, tiles, tile, spots, rng, rotation)
     return canvas
 
 
