@@ -14,6 +14,13 @@ Before the image is built, a small window shows you every cover: approve it with
 
 Built for Spotify. *Not affiliated with or endorsed by Spotify.*
 
+## TL;DR
+
+1. `pip install requests pillow spotipy`
+2. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) with the redirect URI `http://127.0.0.1:8888/callback` and tick **Web API**.
+3. Copy `config.example.json` to `config.json` and fill in the client ID, the client secret and your playlist link.
+4. `python spotify_collage.py`, log in once in the browser, rate the covers, done: `wallpaper.png`.
+
 ## Contents
 
 1. [Requirements](#1-requirements)
