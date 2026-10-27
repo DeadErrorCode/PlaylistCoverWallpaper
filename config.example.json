@@ -1,0 +1,14 @@
+{
+  "_note": "Copy this file to config.json and fill it in. All entries are explained in README.md",
+
+  "spotify_client_id": "",
+  "spotify_client_secret": "",
+
+  "playlists": [
+    "https://open.spotify.com/playlist/YOUR_PLAYLIST_HERE"
+  ],
+
+  "resolution": "auto",
+  "rotation": 0,
+  "output": "wallpaper.png"
+}

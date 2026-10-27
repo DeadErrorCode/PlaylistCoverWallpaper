@@ -1,0 +1,10 @@
+# personal settings and Spotify login (contain credentials!)
+config.json
+.spotify_cache
+.cache
+CLAUDE.md
+
+# generated files
+wallpaper*.png
+__pycache__/
+.venv/
